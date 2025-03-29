@@ -2,13 +2,17 @@ from celery import Celery
 from sqlalchemy import delete
 from urls.models import urls
 from auth.db import get_async_session
-from redis_func import delete_stats_id
 import asyncio
+from config import REDIS_HOST, REDIS_PORT
 
-app = Celery('tasks', broker='redis://localhost:6379')
+app = Celery('tasks', broker=f'redis://{REDIS_HOST}:{REDIS_PORT}')
 
+# Здесь представлен код для исполнения фоновых задач через Celery
 @app.task
 def task_expire_url(short_url: str):
+    """
+    Исполнение задачи удаления ссылок по их короткому url
+    """
     loop = asyncio.get_event_loop()
     if loop.is_running():
         asyncio.ensure_future(expire_url_async(short_url))
@@ -24,7 +28,3 @@ async def expire_url_async(short_url: str):
         finally:
             await session.close()
         break
-
-@app.task
-def delete_stats_id_task(short_url: str):
-    delete_stats_id(short_url)
