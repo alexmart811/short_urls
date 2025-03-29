@@ -9,11 +9,16 @@ from urls.schemas import UrlCreate, UrlChange
 from auth.schemas import UserCreate, UserRead, UserUpdate
 from auth.users import get_user_manager, current_user
 from auth.users import auth_backend
+from tasks import task_expire_url, delete_stats_id_task
+from redis_func import save_task_id, get_task_id, delete_stats_id, custom_key_builder
+from celery.result import AsyncResult
 from datetime import datetime, timedelta
 import zlib
 import validators
 from fastapi_cache.decorator import cache
+from fastapi_cache.coder import JsonCoder
 import random
+import time
 
 router = APIRouter(
     prefix="/links",
@@ -40,7 +45,7 @@ async def create_shorten(
         "user_id": user.id if user else None,
         "orig_url": orig_url,
         "short_url": short_url,
-        "expires_at": datetime.now() + timedelta(seconds=10), 
+        "expires_at": datetime.now() + timedelta(minutes=5), 
         "date_of_create": datetime.now(),
         "last_usage": datetime.now(),
         "count_ref": 0
@@ -50,27 +55,56 @@ async def create_shorten(
     try:
         await session.execute(statement)
         await session.commit()
+
+        # Создаем таску на истечение времени актуальности последнего использования
+        task = task_expire_url.apply_async(args=[short_url], countdown=60*1)
+        save_task_id(short_url, task.id)
+
+
+        # Создаем таску по истечению времени жизни ссылки
+        task_expire_url.apply_async(args=[short_url], countdown=60*2)
+        delete_stats_id_task.apply_async(args=[short_url], countdown=60*2)
         
-    except Exception:
+    except Exception as e:
         raise HTTPException(status_code=500, detail={
             "status": "error",
-            "data": "url already exists",
+            "data": "url already exists"
         })
     return {"status": "success",
             "short_url": short_url}
 
 @router.get("/{short_code}")
 async def get_orig_url(short_code: str, session: AsyncSession = Depends(get_async_session)):
-    query = select(urls.c.orig_url).where(urls.c.short_url == "http://" + short_code)
+    "Перенаправление по короткой ссылке"
+    query = select(urls).where(urls.c.short_url == "http://" + short_code)
     result = await session.execute(query)
     await session.commit()
-    res_url = result.scalars().all()
+    res_url = result.fetchone()
     if not res_url:
         raise HTTPException(status_code=400, detail={
             "status": "Bad Request",
             "data": "data not found",
         })
-    return RedirectResponse(res_url[0])
+    # Обновляем параметры последнего использования
+    url = {
+        "last_usage": datetime.now(),
+        "count_ref": res_url[7] + 1
+    }
+    statement = update(urls).where(urls.c.short_url == "http://" + short_code).values(**url)
+    await session.execute(statement)
+    await session.commit()
+    delete_stats_id("http://" + short_code)
+
+    # Убиваем задачу по удалении ссылки
+    # И создаем новую с новой актуальностью
+    task_id = get_task_id("http://" + short_code)
+    if task_id:
+        AsyncResult(task_id.decode("utf-8")).revoke(terminate=True)
+
+    new_task = task_expire_url.apply_async(args=["http://" + short_code], countdown=60*1)
+    save_task_id("http://" + short_code, new_task.id)
+                
+    return RedirectResponse(res_url[2])
 
 @router.delete("/{short_code}")
 async def delete_url(
@@ -92,6 +126,7 @@ async def delete_url(
             query = delete(urls).where(urls.c.short_url == "http://" + short_code)
             await session.execute(query)
             await session.commit()
+            delete_stats_id("http://" + short_code)
             return {
                 "status": "success",
                 "data": "url has been deleted"
@@ -141,6 +176,7 @@ async def change_url(
             try:
                 await session.execute(statement)
                 await session.commit()
+                delete_stats_id("http://" + short_code)
             except Exception:
                 raise HTTPException(status_code=500, detail={
                     "status": "error",
@@ -160,9 +196,12 @@ async def change_url(
             "status": "error",
             "data": "Unauthorized",
         })
-    
+
+
 @router.get("/{short_code}/stats")
+@cache(expire=60, coder=JsonCoder, key_builder=custom_key_builder)
 async def get_stats(short_code: str, session: AsyncSession = Depends(get_async_session)):
+    time.sleep(5)
     query = select(urls).where(urls.c.short_url == "http://" + short_code)
     result = await session.execute(query)
     await session.commit()
@@ -180,4 +219,3 @@ async def get_stats(short_code: str, session: AsyncSession = Depends(get_async_s
         "last_usage": res_url[6],
         "count_ref": res_url[7]
     }
-
