@@ -73,7 +73,7 @@ async def create_shorten(
         # Создаем таску по истечению времени жизни ссылки
         task_expire_url.apply_async(args=[short_url], countdown=60*10)
         
-    except Exception:
+    except Exception as e:
         # Если ссылка уже существует
         raise HTTPException(status_code=500, detail={
             "status": "error",
