@@ -1,3 +1,4 @@
+# Short Urls
 Сервис для генерации коротких ссылок из длинных. Используется **FastAPI** для обработки запросов, **Redis** для хранения временных данных и **PostgreSQL** для постоянного хранения ссылок.  
 
 ## Функционал
@@ -28,10 +29,11 @@
 │ ├── config.py # Настройки проекта
 │ ├── main.py # Основной запуск FastAPI
 │ └── models.py # Таблица user БД
-│── .gitignore 
+│── .gitignore
+│── api_description.pdf # Презентация с описанием сервиса
 │── alembic.ini
 │── docker-compose.yml
-│── Dockerfile
+└── Dockerfile
 ```
 
 ## Запуск через Docker
@@ -76,3 +78,5 @@ PYTHONPATH=./src
 | last_usage        | TIMESTAMP   | Последнее использование           |
 | count_ref         | Integer     | Счетчик переходов                 |
 ```
+### Описание API
+С полным описанием всего API можно ознакомиться в презентации из корня репозитория.
